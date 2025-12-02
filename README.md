@@ -82,10 +82,3 @@ Safer API with enforced validation
 
 Cleaner tests and business logic
 
-
-git init
-git add .
-git commit -m "wallet api implementation"
-git branch -M main
-git remote add origin git@github.com:gabrieladeremi/wallet-api.git
-git push -u origin main
