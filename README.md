@@ -1,84 +1,203 @@
+# Wallet API – Backend Engineer Assessment (Go)
+This project is a small but production-grade Go service that enables secure money transfers between wallets.
+It is built with clean architecture principles, strong typing for money values, and dependency injection to ensure testability and flexibility.
+
+## Features
+- Create wallets with safe, integer-based balances
+- Fund wallet
+- Transfer money between wallets with full validation
+- Dependency injection for repository implementations
+- In-memory and failing repository
+- Unit tests demonstrating correctness and DI flexibility
+
+# Architecture Overview
+/main        → Application entrypoint (HTTP server)
+
+/internal
+  /model         → Core business models (Wallet, Money)
+  /repo          → Repository interfaces + implementations (MemoryRepo, FailRepo)
+  /service       → Business logic (WalletService)
+  /http          → Handlers & routing
+  
+/test            → Unit tests (Transfer behaviour, DI, edge cases)
+
+The architecture follows clean layering:
+
+- model contains business entities
+- service contains business rules
+- repo abstracts away persistence
+- http exposes API routes
+- cmd/main wires everything together
+
+This ensures each layer has a single responsibility.
+
+# Dependency Injection Approach
+
+To keep the business layer independent of storage concerns, the project uses Dependency Injection (DI) through interfaces.
+
+### Repository Interface
+
 Design Decisions
 1. Dependency Injection Approach
 
 To ensure clean architecture, testability, and loose coupling, the service logic does not depend on concrete implementations of data storage. Instead, I used Dependency Injection (DI) through Go interfaces.
 
 I defined a WalletRepository interface with the required persistence operations:
+```markdown
+### WalletRepository Interface
 
+```go
 type WalletRepository interface {
-  Get(ctx context.Context, id string) (*Wallet, error)
-  Update(ctx context.Context, w *Wallet) error
+    Get(ctx context.Context, id string) (*Wallet, error)
+    Update(ctx context.Context, w *Wallet) error
+    Create(ctx context.Context, w *Wallet) error
 }
-
-The WalletService struct accepts this interface as a constructor parameter:
-
+```
+Injected Into the Service
+```go
 func NewWalletService(repo WalletRepository) *WalletService {
-  return &WalletService{repo: repo}
+    return &WalletService{repo: repo}
 }
+```
+Why this approach?
 
-This design allows the service to work with any repository implementation, such as:
+Swap storage easily
+- MemoryRepo (tests)
+- FailRepo (error simulation)
+- SQLRepo or RedisRepo (future)
+No infrastructure leakage  
+- Service code is pure and does not know how data is stored.
+Improved testability
+- Tests use in-memory or mock repositories.
+Clean architecture
+- Business logic is decoupled from application concerns.
 
-An in-memory repository for testing
+# Money Representation
+Handling money with float64 leads to precision bugs:
+```go
+0.1 + 0.2 != 0.3   ❌
+```
+This is unacceptable for financial systems.
 
-A failing repository to validate error paths
-
-A future database-backed repository without changing service logic.
-
-This architecture ensures:
-
-Separation of concerns
-
-Full test coverage without touching external systems
-
-Flexible evolution of storage without refactoring business logic
-
-Essentially, DI ensures the service is completely independent of infrastructure and focuses solely on business rules.
-
-2. Money Representation Choices
-
-Money handling is a common source of bugs due to floating-point precision issues.
-To prevent these errors, I designed a dedicated Money type.
-
-Why Not Use float64?
-
-float64 produces rounding errors:
-
-0.1 + 0.2 != 0.3
-
-float cannot reliably represent currency
-
-For a wallet system, this is unacceptable—money must be exact.
-
-Chosen Approach
-
-I used a custom Money type that stores value in the smallest currency unit (cents):
-
+### Solution: Custom Money Type (integer cents)
+```go
 type Money struct {
-  cents int64
+    cents int64
 }
+```
+Why integer cents?
+✔ Perfect precision
+✔ No rounding errors
+✔ Simple arithmetic
+✔ Safe validation (no negative transfers)
+✔ Strong domain typing (can't mix money with integers)
 
-This provides:
+```go
+func NewMoneyFromCents(c int64) (Money, error) {
+    if c <= 0 {
+        return Money{}, errors.New("amount must be positive")
+    }
+    return Money{cents: c}, nil
+}
+```
+This prevents invalid values from ever entering your service.
 
-Exact arithmetic (using integers)
+### Transfer Logic
+The wallet service implements the required business rule:
+```go
+func (s *WalletService) Transfer(ctx context.Context, fromID, toID string, amount Money) error
+```
+The flow:
+- Fetch both wallets
+- Validate sender has enough balance
+- Deduct amount from sender
+- Add amount to receiver
+- Persist both updates atomically (per repository rules)
 
-Simple addition/subtraction
+# API Endpoints
+Create Wallet
 
-Prevention of invalid values (negative or zero)
+POST /wallets
+```go
+{
+  "owner": "John Doe",
+}
+```
+Response
+```
+{
+    "id": "80989d2e-f566-423e-9daa-fd02e1f05306",
+    "owner": "Jane Doe",
+    "balance": 0
+}
+```
+Fund Wallet
+POST /wallets/fund
+```go
+{
+    "amount": 10000,
+    "wallet_id": "369264bf-6737-437b-b1be-6f6bf5498087"
+}
+```
+Response
+```
+{
+    "id": "369264bf-6737-437b-b1be-6f6bf5498087",
+    "owner": "John Doe",
+    "balance": 10000
+}
+```
 
-Strong type safety (money cannot be mixed with other int64 values)
+Transfer Money
 
-A helper ensures safe construction:
+POST /transfer
+```go
+{
+  "from": "walletA",
+  "to": "walletB",
+  "amount_cents": 5000
+}
+```
+Response
+```
+{
+  "message": "transfer successful"
+}
+```
 
-func NewMoneyFromCents(c int64) (Money, error)
+# Running the Service
 
-This ensures all money entering the system is valid and prevents silent overflow or misuse.
+1. Install dependencies
+   ```sh
+   go mod tidy
+   ```
+2. Run the server
+   ```sh
+   go run main.go
+   ```
+Server starts at:
+```arduino
+  http://localhost:8080
+```
 
-Benefits
-No floating-point rounding errors
+# Running Tests
+```sh
+go test ./...
+```
 
-Clear money semantics
+Tests include:
+- Successful transfers
+- Insufficient funds errors
+- DI tests with FailRepo
+- Concurrency safety tests
 
-Safer API with enforced validation
+## Example: Memory Repo Storage
+All data during testing or development is stored in-memory, inside:
+```swift
+internal/repo/memory_repo.go
+```
+This means:
 
-Cleaner tests and business logic
-
+- Data resets when the service restarts
+- Fast test execution
+- No external DB required
